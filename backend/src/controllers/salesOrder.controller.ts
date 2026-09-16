@@ -114,6 +114,9 @@ export const convertQuotationToSalesOrder = async (
         });
 
         return order;
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       }
     );
 
@@ -127,6 +130,26 @@ export const convertQuotationToSalesOrder = async (
 
     const errorMessage =
       error instanceof Error ? error.message : "";
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError
+    ) {
+      if (error.code === "P2002") {
+        return res.status(409).json({
+          success: false,
+          message:
+            "A Sales Order already exists for this quotation or order number conflict occurred",
+        });
+      }
+
+      if (error.code === "P2034") {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Concurrent Sales Order conversion detected. Please retry",
+        });
+      }
+    }
 
     if (errorMessage === "QUOTATION_NOT_FOUND") {
       return res.status(404).json({
@@ -219,6 +242,7 @@ export const getSalesOrders = async (
     });
   }
 };
+
 export const confirmSalesOrder = async (
   req: AuthenticatedRequest,
   res: Response
@@ -240,77 +264,77 @@ export const confirmSalesOrder = async (
       });
     }
 
-    const confirmedOrder = await prisma.$transaction(async (tx) => {
-      const salesOrder = await tx.salesOrder.findUnique({
-        where: {
-          id: salesOrderId,
-        },
-        include: {
-          items: true,
-          customer: true,
-          quotation: true,
-        },
-      });
+    const confirmedOrder = await prisma.$transaction(
+      async (tx) => {
+        const salesOrder = await tx.salesOrder.findUnique({
+          where: {
+            id: salesOrderId,
+          },
+          include: {
+            items: true,
+            customer: true,
+            quotation: true,
+          },
+        });
 
-      if (!salesOrder) {
-        throw new Error("SALES_ORDER_NOT_FOUND");
-      }
-
-      if (salesOrder.status !== "PENDING") {
-        throw new Error("SALES_ORDER_NOT_PENDING");
-      }
-
-      /*
-       * Reserve every product atomically.
-       *
-       * The WHERE condition guarantees that reservation succeeds
-       * only when enough available stock exists.
-       *
-       * available = physical quantity - reserved quantity
-       */
-      for (const item of salesOrder.items) {
-        const result = await tx.$executeRaw`
-          UPDATE inventory
-          SET reserved_quantity = reserved_quantity + ${item.quantity},
-              updated_at = NOW()
-          WHERE product_id = ${item.productId}
-            AND physical_quantity - reserved_quantity >= ${item.quantity}
-        `;
-
-        if (result !== 1) {
-          throw new Error(`INSUFFICIENT_STOCK:${item.productId}`);
+        if (!salesOrder) {
+          throw new Error("SALES_ORDER_NOT_FOUND");
         }
+
+        if (salesOrder.status !== "PENDING") {
+          throw new Error("SALES_ORDER_NOT_PENDING");
+        }
+
+        for (const item of salesOrder.items) {
+          const result = await tx.$executeRaw`
+            UPDATE inventory
+            SET reserved_quantity = reserved_quantity + ${item.quantity},
+                updated_at = NOW()
+            WHERE product_id = ${item.productId}
+              AND physical_quantity - reserved_quantity >= ${item.quantity}
+          `;
+
+          if (result !== 1) {
+            throw new Error(
+              `INSUFFICIENT_STOCK:${item.productId}`
+            );
+          }
+        }
+
+        const updatedOrder = await tx.salesOrder.update({
+          where: {
+            id: salesOrderId,
+          },
+          data: {
+            status: "CONFIRMED",
+            confirmedAt: new Date(),
+          },
+          include: {
+            customer: true,
+            quotation: {
+              include: {
+                enquiry: true,
+              },
+            },
+            items: {
+              include: {
+                product: true,
+              },
+            },
+          },
+        });
+
+        return updatedOrder;
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       }
-
-      const updatedOrder = await tx.salesOrder.update({
-        where: {
-          id: salesOrderId,
-        },
-        data: {
-          status: "CONFIRMED",
-          confirmedAt: new Date(),
-        },
-        include: {
-          customer: true,
-          quotation: {
-            include: {
-              enquiry: true,
-            },
-          },
-          items: {
-            include: {
-              product: true,
-            },
-          },
-        },
-      });
-
-      return updatedOrder;
-    });
+    );
 
     return res.status(200).json({
       success: true,
-      message: "Sales Order confirmed and inventory reserved successfully",
+      message:
+        "Sales Order confirmed and inventory reserved successfully",
       data: confirmedOrder,
     });
   } catch (error) {
@@ -318,6 +342,17 @@ export const confirmSalesOrder = async (
 
     const errorMessage =
       error instanceof Error ? error.message : "";
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2034"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Concurrent inventory operation detected. Please retry",
+      });
+    }
 
     if (errorMessage === "SALES_ORDER_NOT_FOUND") {
       return res.status(404).json({
@@ -329,7 +364,8 @@ export const confirmSalesOrder = async (
     if (errorMessage === "SALES_ORDER_NOT_PENDING") {
       return res.status(400).json({
         success: false,
-        message: "Only a PENDING Sales Order can be confirmed",
+        message:
+          "Only a PENDING Sales Order can be confirmed",
       });
     }
 
@@ -338,7 +374,8 @@ export const confirmSalesOrder = async (
 
       return res.status(409).json({
         success: false,
-        message: `Insufficient available inventory for product ID ${productId}`,
+        message:
+          `Insufficient available inventory for product ID ${productId}`,
       });
     }
 
@@ -348,6 +385,7 @@ export const confirmSalesOrder = async (
     });
   }
 };
+
 export const dispatchSalesOrder = async (
   req: AuthenticatedRequest,
   res: Response
@@ -371,158 +409,177 @@ export const dispatchSalesOrder = async (
 
     const { vehicleNumber, driverName, items } = req.body;
 
-    const dispatch = await prisma.$transaction(async (tx) => {
-      const salesOrder = await tx.salesOrder.findUnique({
-        where: {
-          id: salesOrderId,
-        },
-        include: {
-          items: true,
-          dispatch: true,
-        },
-      });
+    const dispatch = await prisma.$transaction(
+      async (tx) => {
+        const salesOrder = await tx.salesOrder.findUnique({
+          where: {
+            id: salesOrderId,
+          },
+          include: {
+            items: true,
+            dispatch: true,
+          },
+        });
 
-      if (!salesOrder) {
-        throw new Error("SALES_ORDER_NOT_FOUND");
-      }
+        if (!salesOrder) {
+          throw new Error("SALES_ORDER_NOT_FOUND");
+        }
 
-      if (salesOrder.status === "CANCELLED") {
-        throw new Error("SALES_ORDER_CANCELLED");
-      }
+        if (salesOrder.status === "CANCELLED") {
+          throw new Error("SALES_ORDER_CANCELLED");
+        }
 
-      if (salesOrder.status !== "CONFIRMED") {
-        throw new Error("SALES_ORDER_NOT_CONFIRMED");
-      }
+        if (salesOrder.status !== "CONFIRMED") {
+          throw new Error("SALES_ORDER_NOT_CONFIRMED");
+        }
 
-      if (salesOrder.dispatch) {
-        throw new Error("DISPATCH_ALREADY_EXISTS");
-      }
+        if (salesOrder.dispatch) {
+          throw new Error("DISPATCH_ALREADY_EXISTS");
+        }
 
-      if (!Array.isArray(items) || items.length === 0) {
-        throw new Error("INVALID_DISPATCH_ITEMS");
-      }
-
-      const orderItemMap = new Map(
-        salesOrder.items.map((item) => [item.productId, item])
-      );
-
-      const dispatchProductIds = new Set<number>();
-
-      for (const item of items) {
-        if (
-          !Number.isInteger(item.productId) ||
-          !Number.isInteger(item.quantity) ||
-          item.quantity <= 0
-        ) {
+        if (!Array.isArray(items) || items.length === 0) {
           throw new Error("INVALID_DISPATCH_ITEMS");
         }
 
-        if (dispatchProductIds.has(item.productId)) {
-          throw new Error("DUPLICATE_DISPATCH_PRODUCT");
+        const orderItemMap = new Map(
+          salesOrder.items.map((item) => [
+            item.productId,
+            item,
+          ])
+        );
+
+        const dispatchProductIds = new Set<number>();
+
+        for (const item of items) {
+          if (
+            !Number.isInteger(item.productId) ||
+            !Number.isInteger(item.quantity) ||
+            item.quantity <= 0
+          ) {
+            throw new Error("INVALID_DISPATCH_ITEMS");
+          }
+
+          if (dispatchProductIds.has(item.productId)) {
+            throw new Error("DUPLICATE_DISPATCH_PRODUCT");
+          }
+
+          dispatchProductIds.add(item.productId);
+
+          const orderItem = orderItemMap.get(item.productId);
+
+          if (!orderItem) {
+            throw new Error("PRODUCT_NOT_IN_ORDER");
+          }
+
+          if (item.quantity !== orderItem.quantity) {
+            throw new Error(
+              `INVALID_DISPATCH_QUANTITY:${item.productId}`
+            );
+          }
         }
 
-        dispatchProductIds.add(item.productId);
-
-        const orderItem = orderItemMap.get(item.productId);
-
-        if (!orderItem) {
-          throw new Error("PRODUCT_NOT_IN_ORDER");
+        if (items.length !== salesOrder.items.length) {
+          throw new Error("ALL_ORDER_ITEMS_REQUIRED");
         }
 
-        if (item.quantity !== orderItem.quantity) {
-          throw new Error(
-            `INVALID_DISPATCH_QUANTITY:${item.productId}`
-          );
-        }
-      }
+        const year = new Date().getFullYear();
 
-      if (items.length !== salesOrder.items.length) {
-        throw new Error("ALL_ORDER_ITEMS_REQUIRED");
-      }
-
-      const year = new Date().getFullYear();
-
-      const lastDispatch = await tx.dispatch.findFirst({
-        where: {
-          dispatchNumber: {
-            startsWith: `DSP-${year}-`,
+        const lastDispatch = await tx.dispatch.findFirst({
+          where: {
+            dispatchNumber: {
+              startsWith: `DSP-${year}-`,
+            },
           },
-        },
-        orderBy: {
-          id: "desc",
-        },
-      });
-
-      const nextNumber = lastDispatch
-        ? Number(lastDispatch.dispatchNumber.split("-")[2]) + 1
-        : 1;
-
-      const dispatchNumber = `DSP-${year}-${String(nextNumber).padStart(
-        5,
-        "0"
-      )}`;
-
-      for (const item of items) {
-        const result = await tx.$executeRaw`
-          UPDATE inventory
-          SET physical_quantity = physical_quantity - ${item.quantity},
-              reserved_quantity = reserved_quantity - ${item.quantity},
-              updated_at = NOW()
-          WHERE product_id = ${item.productId}
-            AND reserved_quantity >= ${item.quantity}
-            AND physical_quantity >= ${item.quantity}
-        `;
-
-        if (result !== 1) {
-          throw new Error(`INSUFFICIENT_RESERVED_STOCK:${item.productId}`);
-        }
-      }
-
-      const createdDispatch = await tx.dispatch.create({
-        data: {
-          dispatchNumber,
-          salesOrderId,
-          dispatchDate: new Date(),
-          vehicleNumber,
-          driverName,
-          items: {
-            create: items.map((item: { productId: number; quantity: number }) => ({
-              productId: item.productId,
-              quantity: item.quantity,
-            })),
+          orderBy: {
+            id: "desc",
           },
-        },
-        include: {
-          salesOrder: {
-            include: {
-              customer: true,
-              quotation: {
-                include: {
-                  enquiry: true,
+        });
+
+        const nextNumber = lastDispatch
+          ? Number(
+              lastDispatch.dispatchNumber.split("-")[2]
+            ) + 1
+          : 1;
+
+        const dispatchNumber = `DSP-${year}-${String(
+          nextNumber
+        ).padStart(5, "0")}`;
+
+        for (const item of items) {
+          const result = await tx.$executeRaw`
+            UPDATE inventory
+            SET physical_quantity = physical_quantity - ${item.quantity},
+                reserved_quantity = reserved_quantity - ${item.quantity},
+                updated_at = NOW()
+            WHERE product_id = ${item.productId}
+              AND reserved_quantity >= ${item.quantity}
+              AND physical_quantity >= ${item.quantity}
+          `;
+
+          if (result !== 1) {
+            throw new Error(
+              `INSUFFICIENT_RESERVED_STOCK:${item.productId}`
+            );
+          }
+        }
+
+        const createdDispatch = await tx.dispatch.create({
+          data: {
+            dispatchNumber,
+            salesOrderId,
+            dispatchDate: new Date(),
+            vehicleNumber,
+            driverName,
+
+            items: {
+              create: items.map(
+                (item: {
+                  productId: number;
+                  quantity: number;
+                }) => ({
+                  productId: item.productId,
+                  quantity: item.quantity,
+                })
+              ),
+            },
+          },
+
+          include: {
+            salesOrder: {
+              include: {
+                customer: true,
+                quotation: {
+                  include: {
+                    enquiry: true,
+                  },
                 },
               },
             },
-          },
-          items: {
-            include: {
-              product: true,
+
+            items: {
+              include: {
+                product: true,
+              },
             },
           },
-        },
-      });
+        });
 
-      await tx.salesOrder.update({
-        where: {
-          id: salesOrderId,
-        },
-        data: {
-          status: "DISPATCHED",
-          dispatchedAt: new Date(),
-        },
-      });
+        await tx.salesOrder.update({
+          where: {
+            id: salesOrderId,
+          },
+          data: {
+            status: "DISPATCHED",
+            dispatchedAt: new Date(),
+          },
+        });
 
-      return createdDispatch;
-    });
+        return createdDispatch;
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      }
+    );
 
     return res.status(201).json({
       success: true,
@@ -534,6 +591,17 @@ export const dispatchSalesOrder = async (
 
     const errorMessage =
       error instanceof Error ? error.message : "";
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2034"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Concurrent inventory operation detected. Please retry",
+      });
+    }
 
     if (errorMessage === "SALES_ORDER_NOT_FOUND") {
       return res.status(404).json({
@@ -552,14 +620,16 @@ export const dispatchSalesOrder = async (
     if (errorMessage === "SALES_ORDER_NOT_CONFIRMED") {
       return res.status(400).json({
         success: false,
-        message: "Only a CONFIRMED Sales Order can be dispatched",
+        message:
+          "Only a CONFIRMED Sales Order can be dispatched",
       });
     }
 
     if (errorMessage === "DISPATCH_ALREADY_EXISTS") {
       return res.status(409).json({
         success: false,
-        message: "A dispatch already exists for this Sales Order",
+        message:
+          "A dispatch already exists for this Sales Order",
       });
     }
 
@@ -575,27 +645,191 @@ export const dispatchSalesOrder = async (
       });
     }
 
-    if (errorMessage.startsWith("INVALID_DISPATCH_QUANTITY:")) {
+    if (
+      errorMessage.startsWith("INVALID_DISPATCH_QUANTITY:")
+    ) {
       const productId = errorMessage.split(":")[1];
 
       return res.status(400).json({
         success: false,
-        message: `Dispatch quantity must match Sales Order quantity for product ID ${productId}`,
+        message:
+          `Dispatch quantity must match Sales Order quantity for product ID ${productId}`,
       });
     }
 
-    if (errorMessage.startsWith("INSUFFICIENT_RESERVED_STOCK:")) {
+    if (
+      errorMessage.startsWith("INSUFFICIENT_RESERVED_STOCK:")
+    ) {
       const productId = errorMessage.split(":")[1];
 
       return res.status(409).json({
         success: false,
-        message: `Insufficient reserved inventory for product ID ${productId}`,
+        message:
+          `Insufficient reserved inventory for product ID ${productId}`,
       });
     }
 
     return res.status(500).json({
       success: false,
       message: "Failed to dispatch Sales Order",
+    });
+  }
+};
+
+export const cancelSalesOrder = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    const salesOrderId = Number(req.params.id);
+
+    if (!Number.isInteger(salesOrderId) || salesOrderId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Sales Order ID",
+      });
+    }
+
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const lockedOrder = await tx.$queryRaw<
+          Array<{
+            id: number;
+            status: string;
+          }>
+        >`
+          SELECT id, status
+          FROM sales_orders
+          WHERE id = ${salesOrderId}
+          FOR UPDATE
+        `;
+
+        if (lockedOrder.length === 0) {
+          throw new Error("SALES_ORDER_NOT_FOUND");
+        }
+
+        if (lockedOrder[0].status !== "CONFIRMED") {
+          throw new Error(
+            "ONLY_CONFIRMED_ORDER_CAN_BE_CANCELLED"
+          );
+        }
+
+        const orderItems = await tx.salesOrderItem.findMany({
+          where: {
+            salesOrderId,
+          },
+        });
+
+        for (const item of orderItems) {
+          const updated = await tx.$executeRaw`
+            UPDATE inventory
+            SET reserved_quantity =
+                  reserved_quantity - ${item.quantity},
+                updated_at = NOW()
+            WHERE product_id = ${item.productId}
+              AND reserved_quantity >= ${item.quantity}
+          `;
+
+          if (updated !== 1) {
+            throw new Error(
+              `INVALID_RESERVED_QUANTITY:${item.productId}`
+            );
+          }
+        }
+
+        const salesOrder = await tx.salesOrder.update({
+          where: {
+            id: salesOrderId,
+          },
+          data: {
+            status: "CANCELLED",
+            cancelledAt: new Date(),
+          },
+          include: {
+            customer: true,
+
+            quotation: {
+              include: {
+                enquiry: true,
+              },
+            },
+
+            items: {
+              include: {
+                product: true,
+              },
+            },
+          },
+        });
+
+        return salesOrder;
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Sales Order cancelled successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Cancel Sales Order error:", error);
+
+    const errorMessage =
+      error instanceof Error ? error.message : "";
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2034"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Concurrent inventory operation detected. Please retry",
+      });
+    }
+
+    if (errorMessage === "SALES_ORDER_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        message: "Sales Order not found",
+      });
+    }
+
+    if (
+      errorMessage === "ONLY_CONFIRMED_ORDER_CAN_BE_CANCELLED"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only a CONFIRMED Sales Order can be cancelled",
+      });
+    }
+
+    if (
+      errorMessage.startsWith("INVALID_RESERVED_QUANTITY:")
+    ) {
+      const productId = errorMessage.split(":")[1];
+
+      return res.status(409).json({
+        success: false,
+        message:
+          `Invalid reserved inventory for product ID ${productId}`,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cancel Sales Order",
     });
   }
 };

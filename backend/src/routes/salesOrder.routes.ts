@@ -1,16 +1,12 @@
 import { Router } from "express";
-
 import {
   getSalesOrders,
   confirmSalesOrder,
   dispatchSalesOrder,
+  cancelSalesOrder,
 } from "../controllers/salesOrder.controller";
-
 import { authenticate } from "../middleware/auth.middleware";
 import { authorize } from "../middleware/role.middleware";
-import { validate } from "../middleware/validation.middleware";
-
-import { createDispatchSchema } from "../validators/dispatch.validator";
 
 const router = Router();
 
@@ -29,10 +25,16 @@ router.post(
 );
 
 router.post(
+  "/:id/cancel",
+  authenticate,
+  authorize("ADMIN"),
+  cancelSalesOrder
+);
+
+router.post(
   "/:id/dispatch",
   authenticate,
   authorize("ADMIN"),
-  validate(createDispatchSchema),
   dispatchSalesOrder
 );
 
