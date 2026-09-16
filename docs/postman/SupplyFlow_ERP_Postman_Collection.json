@@ -1,0 +1,49 @@
+{
+  "info": {
+    "name": "SupplyFlow ERP API",
+    "description": "REST API collection for SupplyFlow ERP: Enquiry → Quotation → Sales Order → Reservation → Dispatch.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key":"baseUrl","value":"http://localhost:5000/api"},
+    {"key":"adminToken","value":""},
+    {"key":"salesToken","value":""},
+    {"key":"enquiryId","value":""},
+    {"key":"quotationId","value":""},
+    {"key":"salesOrderId","value":""},
+    {"key":"productId","value":"1"}
+  ],
+  "item": [
+    {"name":"Authentication","item":[
+      {"name":"Login - Admin","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\n  \"email\": \"admin@supplyflow.com\",\n  \"password\": \"Admin@123\"\n}"},"url":"{{baseUrl}}/auth/login"},"event":[{"listen":"test","script":{"exec":["pm.test('Login successful',()=>pm.expect(pm.response.code).to.be.oneOf([200,201]));","const j=pm.response.json(); if(j.token) pm.collectionVariables.set('adminToken',j.token);"]}}]},
+      {"name":"Login - Sales User","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\n  \"email\": \"sales@supplyflow.com\",\n  \"password\": \"Sales@123\"\n}"},"url":"{{baseUrl}}/auth/login"},"event":[{"listen":"test","script":{"exec":["pm.test('Login successful',()=>pm.expect(pm.response.code).to.be.oneOf([200,201]));","const j=pm.response.json(); if(j.token) pm.collectionVariables.set('salesToken',j.token);"]}}]}
+    ]},
+    {"name":"Enquiries","item":[
+      {"name":"Create Enquiry","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"body":{"mode":"raw","raw":"{\n  \"companyName\": \"Acme Industrial Solutions\",\n  \"contactPerson\": \"Rahul Sharma\",\n  \"mobile\": \"9876543210\",\n  \"email\": \"rahul@acmeindustrial.com\",\n  \"city\": \"Bengaluru\",\n  \"requiredDate\": \"2026-10-15T00:00:00.000Z\",\n  \"notes\": \"Requirement for industrial components\",\n  \"items\": [{\"productId\":1,\"quantity\":10},{\"productId\":2,\"quantity\":5}]\n}"},"url":"{{baseUrl}}/enquiries"},"event":[{"listen":"test","script":{"exec":["pm.test('Enquiry created',()=>pm.expect(pm.response.code).to.be.oneOf([200,201]));","const j=pm.response.json(); if(j.id) pm.collectionVariables.set('enquiryId',j.id);"]}}]},
+      {"name":"Get Enquiries","request":{"method":"GET","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"url":"{{baseUrl}}/enquiries"}}
+    ]},
+    {"name":"Quotations","item":[
+      {"name":"Create Quotation","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"body":{"mode":"raw","raw":"{\n  \"enquiryId\": \"{{enquiryId}}\",\n  \"validUntil\": \"2026-10-31T00:00:00.000Z\",\n  \"discountPercent\": 5,\n  \"gstPercent\": 18\n}"},"url":"{{baseUrl}}/quotations"},"event":[{"listen":"test","script":{"exec":["pm.test('Quotation created',()=>pm.expect(pm.response.code).to.be.oneOf([200,201]));","const j=pm.response.json(); if(j.id) pm.collectionVariables.set('quotationId',j.id);"]}}]},
+      {"name":"Get Quotations","request":{"method":"GET","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"url":"{{baseUrl}}/quotations"}},
+      {"name":"Send Quotation","request":{"method":"PATCH","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"body":{"mode":"raw","raw":"{\"status\":\"SENT\"}"},"url":"{{baseUrl}}/quotations/{{quotationId}}/status"}},
+      {"name":"Accept Quotation","request":{"method":"PATCH","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"body":{"mode":"raw","raw":"{\"status\":\"ACCEPTED\"}"},"url":"{{baseUrl}}/quotations/{{quotationId}}/status"}},
+      {"name":"Reject Quotation","request":{"method":"PATCH","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"body":{"mode":"raw","raw":"{\"status\":\"REJECTED\"}"},"url":"{{baseUrl}}/quotations/{{quotationId}}/status"}},
+      {"name":"Convert Accepted Quotation","request":{"method":"POST","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"url":"{{baseUrl}}/quotations/{{quotationId}}/convert"},"event":[{"listen":"test","script":{"exec":["pm.test('Sales order created',()=>pm.expect(pm.response.code).to.be.oneOf([200,201]));","const j=pm.response.json(); if(j.id) pm.collectionVariables.set('salesOrderId',j.id);"]}}]}
+    ]},
+    {"name":"Sales Orders","item":[
+      {"name":"Get Sales Orders","request":{"method":"GET","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"url":"{{baseUrl}}/sales-orders"}},
+      {"name":"Confirm Sales Order - Reserve Stock","request":{"method":"POST","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}"}]},"url":"{{baseUrl}}/sales-orders/{{salesOrderId}}/confirm"}},
+      {"name":"Cancel Confirmed Sales Order","request":{"method":"POST","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}"}]},"url":"{{baseUrl}}/sales-orders/{{salesOrderId}}/cancel"}},
+      {"name":"Dispatch Sales Order","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}"}]},"body":{"mode":"raw","raw":"{\n  \"vehicleNumber\": \"KA01AB1234\",\n  \"driverName\": \"Ramesh Kumar\",\n  \"items\": [{\"productId\":1,\"quantity\":10},{\"productId\":2,\"quantity\":5}]\n}"},"url":"{{baseUrl}}/sales-orders/{{salesOrderId}}/dispatch"}}
+    ]},
+    {"name":"Inventory","item":[
+      {"name":"Get Inventory","request":{"method":"GET","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"url":"{{baseUrl}}/inventory"}},
+      {"name":"Update Inventory - Admin","request":{"method":"PATCH","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}"}]},"body":{"mode":"raw","raw":"{\n  \"physicalQty\": 100,\n  \"reservedQty\": 20\n}"},"url":"{{baseUrl}}/inventory/{{productId}}"}}
+    ]},
+    {"name":"RBAC & Authentication Tests","item":[
+      {"name":"Sales User - Confirm Order (Expected 403)","request":{"method":"POST","auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"url":"{{baseUrl}}/sales-orders/{{salesOrderId}}/confirm"},"event":[{"listen":"test","script":{"exec":["pm.test('RBAC blocks sales user',()=>pm.expect(pm.response.code).to.eql(403));"]}}]},
+      {"name":"Sales User - Update Inventory (Expected 403)","request":{"method":"PATCH","header":[{"key":"Content-Type","value":"application/json"}],"auth":{"type":"bearer","bearer":[{"key":"token","value":"{{salesToken}}"}]},"body":{"mode":"raw","raw":"{\"physicalQty\":100,\"reservedQty\":20}"},"url":"{{baseUrl}}/inventory/{{productId}}"},"event":[{"listen":"test","script":{"exec":["pm.test('RBAC blocks inventory update',()=>pm.expect(pm.response.code).to.eql(403));"]}}]},
+      {"name":"No Token - Inventory (Expected 401)","request":{"method":"GET","url":"{{baseUrl}}/inventory"},"event":[{"listen":"test","script":{"exec":["pm.test('Authentication required',()=>pm.expect(pm.response.code).to.eql(401));"]}}]}
+    ]}
+  ]
+}
