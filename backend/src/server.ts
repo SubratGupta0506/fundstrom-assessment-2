@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import authRoutes from "./routes/auth.routes";
 import enquiryRoutes from "./routes/enquiry.routes";
+import quotationRoutes from "./routes/quotation.routes";
 
 dotenv.config();
 
@@ -25,6 +26,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/enquiries", enquiryRoutes);
+app.use("/api/quotations", quotationRoutes);
 
 const PORT = process.env.PORT || 5000;
 
