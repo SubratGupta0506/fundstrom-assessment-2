@@ -348,3 +348,254 @@ export const confirmSalesOrder = async (
     });
   }
 };
+export const dispatchSalesOrder = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    const salesOrderId = Number(req.params.id);
+
+    if (!Number.isInteger(salesOrderId) || salesOrderId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Sales Order ID",
+      });
+    }
+
+    const { vehicleNumber, driverName, items } = req.body;
+
+    const dispatch = await prisma.$transaction(async (tx) => {
+      const salesOrder = await tx.salesOrder.findUnique({
+        where: {
+          id: salesOrderId,
+        },
+        include: {
+          items: true,
+          dispatch: true,
+        },
+      });
+
+      if (!salesOrder) {
+        throw new Error("SALES_ORDER_NOT_FOUND");
+      }
+
+      if (salesOrder.status === "CANCELLED") {
+        throw new Error("SALES_ORDER_CANCELLED");
+      }
+
+      if (salesOrder.status !== "CONFIRMED") {
+        throw new Error("SALES_ORDER_NOT_CONFIRMED");
+      }
+
+      if (salesOrder.dispatch) {
+        throw new Error("DISPATCH_ALREADY_EXISTS");
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new Error("INVALID_DISPATCH_ITEMS");
+      }
+
+      const orderItemMap = new Map(
+        salesOrder.items.map((item) => [item.productId, item])
+      );
+
+      const dispatchProductIds = new Set<number>();
+
+      for (const item of items) {
+        if (
+          !Number.isInteger(item.productId) ||
+          !Number.isInteger(item.quantity) ||
+          item.quantity <= 0
+        ) {
+          throw new Error("INVALID_DISPATCH_ITEMS");
+        }
+
+        if (dispatchProductIds.has(item.productId)) {
+          throw new Error("DUPLICATE_DISPATCH_PRODUCT");
+        }
+
+        dispatchProductIds.add(item.productId);
+
+        const orderItem = orderItemMap.get(item.productId);
+
+        if (!orderItem) {
+          throw new Error("PRODUCT_NOT_IN_ORDER");
+        }
+
+        if (item.quantity !== orderItem.quantity) {
+          throw new Error(
+            `INVALID_DISPATCH_QUANTITY:${item.productId}`
+          );
+        }
+      }
+
+      if (items.length !== salesOrder.items.length) {
+        throw new Error("ALL_ORDER_ITEMS_REQUIRED");
+      }
+
+      const year = new Date().getFullYear();
+
+      const lastDispatch = await tx.dispatch.findFirst({
+        where: {
+          dispatchNumber: {
+            startsWith: `DSP-${year}-`,
+          },
+        },
+        orderBy: {
+          id: "desc",
+        },
+      });
+
+      const nextNumber = lastDispatch
+        ? Number(lastDispatch.dispatchNumber.split("-")[2]) + 1
+        : 1;
+
+      const dispatchNumber = `DSP-${year}-${String(nextNumber).padStart(
+        5,
+        "0"
+      )}`;
+
+      for (const item of items) {
+        const result = await tx.$executeRaw`
+          UPDATE inventory
+          SET physical_quantity = physical_quantity - ${item.quantity},
+              reserved_quantity = reserved_quantity - ${item.quantity},
+              updated_at = NOW()
+          WHERE product_id = ${item.productId}
+            AND reserved_quantity >= ${item.quantity}
+            AND physical_quantity >= ${item.quantity}
+        `;
+
+        if (result !== 1) {
+          throw new Error(`INSUFFICIENT_RESERVED_STOCK:${item.productId}`);
+        }
+      }
+
+      const createdDispatch = await tx.dispatch.create({
+        data: {
+          dispatchNumber,
+          salesOrderId,
+          dispatchDate: new Date(),
+          vehicleNumber,
+          driverName,
+          items: {
+            create: items.map((item: { productId: number; quantity: number }) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+            })),
+          },
+        },
+        include: {
+          salesOrder: {
+            include: {
+              customer: true,
+              quotation: {
+                include: {
+                  enquiry: true,
+                },
+              },
+            },
+          },
+          items: {
+            include: {
+              product: true,
+            },
+          },
+        },
+      });
+
+      await tx.salesOrder.update({
+        where: {
+          id: salesOrderId,
+        },
+        data: {
+          status: "DISPATCHED",
+          dispatchedAt: new Date(),
+        },
+      });
+
+      return createdDispatch;
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Sales Order dispatched successfully",
+      data: dispatch,
+    });
+  } catch (error) {
+    console.error("Dispatch Sales Order error:", error);
+
+    const errorMessage =
+      error instanceof Error ? error.message : "";
+
+    if (errorMessage === "SALES_ORDER_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        message: "Sales Order not found",
+      });
+    }
+
+    if (errorMessage === "SALES_ORDER_CANCELLED") {
+      return res.status(400).json({
+        success: false,
+        message: "Cancelled Sales Order cannot be dispatched",
+      });
+    }
+
+    if (errorMessage === "SALES_ORDER_NOT_CONFIRMED") {
+      return res.status(400).json({
+        success: false,
+        message: "Only a CONFIRMED Sales Order can be dispatched",
+      });
+    }
+
+    if (errorMessage === "DISPATCH_ALREADY_EXISTS") {
+      return res.status(409).json({
+        success: false,
+        message: "A dispatch already exists for this Sales Order",
+      });
+    }
+
+    if (
+      errorMessage === "INVALID_DISPATCH_ITEMS" ||
+      errorMessage === "DUPLICATE_DISPATCH_PRODUCT" ||
+      errorMessage === "PRODUCT_NOT_IN_ORDER" ||
+      errorMessage === "ALL_ORDER_ITEMS_REQUIRED"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid dispatch items",
+      });
+    }
+
+    if (errorMessage.startsWith("INVALID_DISPATCH_QUANTITY:")) {
+      const productId = errorMessage.split(":")[1];
+
+      return res.status(400).json({
+        success: false,
+        message: `Dispatch quantity must match Sales Order quantity for product ID ${productId}`,
+      });
+    }
+
+    if (errorMessage.startsWith("INSUFFICIENT_RESERVED_STOCK:")) {
+      const productId = errorMessage.split(":")[1];
+
+      return res.status(409).json({
+        success: false,
+        message: `Insufficient reserved inventory for product ID ${productId}`,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to dispatch Sales Order",
+    });
+  }
+};
