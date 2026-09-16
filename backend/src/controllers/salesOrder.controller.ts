@@ -219,3 +219,132 @@ export const getSalesOrders = async (
     });
   }
 };
+export const confirmSalesOrder = async (
+  req: AuthenticatedRequest,
+  res: Response
+) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    const salesOrderId = Number(req.params.id);
+
+    if (!Number.isInteger(salesOrderId) || salesOrderId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Sales Order ID",
+      });
+    }
+
+    const confirmedOrder = await prisma.$transaction(async (tx) => {
+      const salesOrder = await tx.salesOrder.findUnique({
+        where: {
+          id: salesOrderId,
+        },
+        include: {
+          items: true,
+          customer: true,
+          quotation: true,
+        },
+      });
+
+      if (!salesOrder) {
+        throw new Error("SALES_ORDER_NOT_FOUND");
+      }
+
+      if (salesOrder.status !== "PENDING") {
+        throw new Error("SALES_ORDER_NOT_PENDING");
+      }
+
+      /*
+       * Reserve every product atomically.
+       *
+       * The WHERE condition guarantees that reservation succeeds
+       * only when enough available stock exists.
+       *
+       * available = physical quantity - reserved quantity
+       */
+      for (const item of salesOrder.items) {
+        const result = await tx.$executeRaw`
+          UPDATE inventory
+          SET reserved_quantity = reserved_quantity + ${item.quantity},
+              updated_at = NOW()
+          WHERE product_id = ${item.productId}
+            AND physical_quantity - reserved_quantity >= ${item.quantity}
+        `;
+
+        if (result !== 1) {
+          throw new Error(`INSUFFICIENT_STOCK:${item.productId}`);
+        }
+      }
+
+      const updatedOrder = await tx.salesOrder.update({
+        where: {
+          id: salesOrderId,
+        },
+        data: {
+          status: "CONFIRMED",
+          confirmedAt: new Date(),
+        },
+        include: {
+          customer: true,
+          quotation: {
+            include: {
+              enquiry: true,
+            },
+          },
+          items: {
+            include: {
+              product: true,
+            },
+          },
+        },
+      });
+
+      return updatedOrder;
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Sales Order confirmed and inventory reserved successfully",
+      data: confirmedOrder,
+    });
+  } catch (error) {
+    console.error("Confirm Sales Order error:", error);
+
+    const errorMessage =
+      error instanceof Error ? error.message : "";
+
+    if (errorMessage === "SALES_ORDER_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        message: "Sales Order not found",
+      });
+    }
+
+    if (errorMessage === "SALES_ORDER_NOT_PENDING") {
+      return res.status(400).json({
+        success: false,
+        message: "Only a PENDING Sales Order can be confirmed",
+      });
+    }
+
+    if (errorMessage.startsWith("INSUFFICIENT_STOCK:")) {
+      const productId = errorMessage.split(":")[1];
+
+      return res.status(409).json({
+        success: false,
+        message: `Insufficient available inventory for product ID ${productId}`,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to confirm Sales Order",
+    });
+  }
+};

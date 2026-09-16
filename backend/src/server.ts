@@ -5,6 +5,7 @@ import authRoutes from "./routes/auth.routes";
 import enquiryRoutes from "./routes/enquiry.routes";
 import quotationRoutes from "./routes/quotation.routes";
 import salesOrderRoutes from "./routes/salesOrder.routes";
+import inventoryRoutes from "./routes/inventory.routes";
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/enquiries", enquiryRoutes);
 app.use("/api/quotations", quotationRoutes);
 app.use("/api/sales-orders", salesOrderRoutes);
+app.use("/api/inventory", inventoryRoutes);
 
 const PORT = process.env.PORT || 5000;
 
