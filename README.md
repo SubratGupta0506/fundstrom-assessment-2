@@ -1,130 +1,591 @@
-# 🎓 Vidya Setu – AI Study Assistant
+# SupplyFlow ERP
 
-> "Every subject is isolated, every chat is remembered, and every line of PDF is searchable."
+A full-stack ERP application for managing the industrial sales workflow from customer enquiry through quotation, sales order, inventory reservation, and dispatch.
 
----
+## Business Workflow
 
-## 📁 Folder Structure
-
-```
-vidya_setu/
-├── app.py               ← Flask backend (all API routes)
-├── engine.py            ← Core retrieval engine + chat memory
-├── requirements.txt     ← Dependencies (Flask only)
-├── data/
-│   ├── python.json      ← Structured Python knowledge base (18 topics)
-│   ├── dbms.json        ← Structured DBMS knowledge base (17 topics)
-│   ├── python_pdf.json  ← 2507 lines extracted from Python PDF
-│   └── dbms_pdf.json    ← 5015 lines extracted from DBMS PDF
-└── templates/
-    └── index.html       ← Full frontend UI
-```
-
----
-
-## 🚀 How to Run
-
-### 1. Install dependencies
-```bash
-pip install flask
+```text
+Customer
+   ↓
+Enquiry
+   ↓
+Quotation
+   ↓
+Accepted Quotation
+   ↓
+Sales Order
+   ↓
+Admin Confirmation
+   ↓
+Inventory Reservation
+   ↓
+Dispatch
+   ↓
+Physical Stock Updated
 ```
 
-### 2. Start the server
-```bash
-cd vidya_setu
-python app.py
+## Features
+
+### Authentication & Authorization
+- JWT-based authentication
+- Password hashing with bcrypt
+- Role-based access control
+- ADMIN and SALES_USER roles
+- Protected backend APIs
+- Backend-enforced authorization
+
+### Customer Enquiries
+- Create and view customer enquiries
+- Customer information:
+  - Company Name
+  - Contact Person
+  - Mobile
+  - Email
+  - City
+- Required date and notes
+- Multiple products and quantities per enquiry
+- Enquiry status workflow:
+  `NEW → QUOTED → WON / LOST`
+
+### Quotations
+- Create quotations from enquiries
+- Multiple quotation line items
+- Server-side price and total calculation
+- Discount and GST calculation
+- Valid-until date
+- Quotation status workflow:
+  `DRAFT → SENT → ACCEPTED / REJECTED`
+- Accepted quotations can be converted into Sales Orders
+- Rejected or draft quotations cannot be converted
+
+### Sales Orders
+- Convert accepted quotations into Sales Orders
+- One quotation can generate at most one Sales Order
+- Sales Order traceability to the originating quotation and enquiry
+- Status workflow:
+  `PENDING → CONFIRMED → DISPATCHED`
+- Confirmed orders can be cancelled according to workflow rules
+
+### Inventory
+- Physical quantity tracking
+- Reserved quantity tracking
+- Available quantity calculated as:
+
+```text
+Available = Physical Quantity - Reserved Quantity
 ```
 
-### 3. Open in browser
+- Admin inventory updates
+- Prevention of negative quantities
+- Prevention of reserved quantity exceeding physical quantity
+- Stock validation during order confirmation
+
+### Reservation & Dispatch
+- Inventory is reserved when an ADMIN confirms a Sales Order
+- Physical stock remains unchanged during reservation
+- Dispatch decreases physical stock
+- Dispatch also decreases reserved stock
+- Duplicate dispatch is prevented
+- Dispatch is restricted to confirmed orders
+- Transactional inventory updates protect stock consistency
+
+## Roles & Permissions
+
+| Operation | ADMIN | SALES_USER |
+|---|---:|---:|
+| Login | ✓ | ✓ |
+| View enquiries | ✓ | ✓ |
+| Create enquiries | ✓ | ✓ |
+| View quotations | ✓ | ✓ |
+| Create quotations | ✓ | ✓ |
+| Update quotation status | ✓ | ✓ |
+| Convert accepted quotation | ✓ | ✓ |
+| View sales orders | ✓ | ✓ |
+| View inventory | ✓ | ✓ |
+| Confirm Sales Order | ✓ | — |
+| Cancel confirmed Sales Order | ✓ | — |
+| Update inventory | ✓ | — |
+| Dispatch Sales Order | ✓ | — |
+
+Authorization is enforced on the backend; frontend restrictions are not used as the security boundary.
+
+## Tech Stack
+
+### Frontend
+- React
+- TypeScript
+- Vite
+- Axios
+- React Router
+
+### Backend
+- Node.js
+- Express.js
+- TypeScript
+- JWT
+- bcrypt
+- Zod
+
+### Database
+- PostgreSQL
+- Prisma ORM
+
+### Testing & API Documentation
+- Jest
+- Supertest
+- Postman
+
+## Project Structure
+
+```text
+fundstrom-assessment-2/
+│
+├── backend/
+│   ├── prisma/
+│   │   ├── migrations/
+│   │   ├── schema.prisma
+│   │   └── seed.ts
+│   ├── src/
+│   │   ├── config/
+│   │   ├── controllers/
+│   │   ├── middleware/
+│   │   ├── routes/
+│   │   ├── services/
+│   │   ├── utils/
+│   │   ├── validators/
+│   │   └── server.ts
+│   ├── tests/
+│   ├── .env.example
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── frontend/
+│   ├── src/
+│   │   ├── api/
+│   │   ├── components/
+│   │   ├── context/
+│   │   ├── pages/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   ├── styles.css
+│   │   └── types.ts
+│   ├── .env.example
+│   ├── package.json
+│   └── vite.config.ts
+│
+├── docs/
+│   ├── postman/
+│   │   └── SupplyFlow_ERP_Postman_Collection.json
+│   └── ER-DIAGRAM.md
+│
+└── README.md
 ```
+
+## Database Design
+
+The application uses a relational PostgreSQL database with Prisma ORM.
+
+Main entities:
+
+```text
+Users
+Customers
+Products
+Inventory
+Enquiries
+EnquiryItems
+Quotations
+QuotationItems
+SalesOrders
+SalesOrderItems
+Dispatches
+DispatchItems
+```
+
+The database uses primary keys, foreign keys, unique constraints, indexes, and transactional operations to maintain workflow and inventory consistency.
+
+See:
+
+`docs/ER-DIAGRAM.md`
+
+## API Endpoints
+
+### Authentication
+
+```http
+POST /api/auth/login
+```
+
+### Enquiries
+
+```http
+POST /api/enquiries
+GET  /api/enquiries
+```
+
+### Quotations
+
+```http
+POST  /api/quotations
+GET   /api/quotations
+PATCH /api/quotations/:id/status
+POST  /api/quotations/:id/convert
+```
+
+### Sales Orders
+
+```http
+GET  /api/sales-orders
+POST /api/sales-orders/:id/confirm
+POST /api/sales-orders/:id/cancel
+POST /api/sales-orders/:id/dispatch
+```
+
+### Inventory
+
+```http
+GET   /api/inventory
+PATCH /api/inventory/:productId
+```
+
+All protected endpoints require a JWT Bearer token.
+
+## Environment Variables
+
+### Backend
+
+Create:
+
+```text
+backend/.env
+```
+
+Example:
+
+```env
+DATABASE_URL="postgresql://USERNAME:PASSWORD@localhost:5432/supplyflow_erp"
+JWT_SECRET="your-secure-jwt-secret"
+PORT=5000
+```
+
+Do not commit `.env` files.
+
+### Frontend
+
+Create:
+
+```text
+frontend/.env
+```
+
+Example:
+
+```env
+VITE_API_BASE_URL=http://localhost:5000/api
+```
+
+## Prerequisites
+
+Install:
+
+- Node.js
+- npm
+- PostgreSQL
+
+Verify Node.js:
+
+```cmd
+node -v
+npm -v
+```
+
+## Installation
+
+Clone the repository and enter the project:
+
+```cmd
+git clone <repository-url>
+cd fundstrom-assessment-2
+```
+
+### Backend Setup
+
+```cmd
+cd backend
+npm install
+```
+
+Configure:
+
+```text
+backend/.env
+```
+
+Run Prisma client generation:
+
+```cmd
+npx prisma generate
+```
+
+Run database migrations:
+
+```cmd
+npx prisma migrate deploy
+```
+
+Seed the database:
+
+```cmd
+npx prisma db seed
+```
+
+Start the backend:
+
+```cmd
+npm run dev
+```
+
+Backend runs on:
+
+```text
 http://localhost:5000
 ```
 
----
+### Frontend Setup
 
-## 🌐 API Endpoints
+Open another CMD window:
 
-| Method | Endpoint              | Description              |
-|--------|-----------------------|--------------------------|
-| GET    | /health               | Health check             |
-| POST   | /new_chat             | Start a new chat session |
-| POST   | /chat                 | Ask a question           |
-| GET    | /history/<chat_id>    | Get chat history         |
-| GET    | /chats                | List all chat IDs        |
-| POST   | /delete_chat/<id>     | Delete a chat            |
-| GET    | /topics?subject=DBMS  | List topics for subject  |
-
-### POST /chat
-**Request:**
-```json
-{
-  "question": "What is normalization?",
-  "chat_id": "abc123"
-}
-```
-**Response:**
-```json
-{
-  "answer": "📚 Normalization...",
-  "subject": "DBMS",
-  "source": "structured",
-  "response_time_ms": 2.1,
-  "chat_id": "abc123"
-}
+```cmd
+cd fundstrom-assessment-2\frontend
+npm install
 ```
 
----
+Configure:
 
-## 🧠 Architecture
-
-```
-User Question
-    │
-    ├── Greeting check (rule-based) → instant response
-    │
-    ├── Subject Detection (keyword scoring)
-    │       Python keywords: list, function, loop, class, dict...
-    │       DBMS keywords: transaction, normalization, SQL, join...
-    │
-    ├── Tokenize query
-    │
-    ├── Stage 1: Keyword match on structured JSON topics (O(1) lookup)
-    │       → Returns definition, key points, example, simple explanation
-    │
-    ├── Stage 2: TF-IDF search over PDF records (inverted index)
-    │       → Returns top relevant lines from course PDFs
-    │
-    └── Stage 3: "Not found" message if both fail
+```text
+frontend/.env
 ```
 
----
+Start the frontend:
 
-## ✅ Features
+```cmd
+npm run dev
+```
 
-- **Subject Isolation**: Python and DBMS are completely separate pipelines
-- **Greeing Handling**: "hi", "hello", "thanks" → friendly responses
-- **Context Memory**: Last subject remembered across questions
-- **Multi-Chat**: Multiple chat sessions with history
-- **Structured Answers**: Definition + Key Points + Example + Simple Words
-- **PDF Coverage**: All 7,500+ lines from uploaded PDFs are indexed and searchable
-- **Sub-second response**: In-memory TF-IDF, no heavy models
-- **No APIs, No LLM, Fully local**: Runs on 2GB RAM
+Open the Vite URL shown in the terminal.
 
----
+## Database Commands
 
-## 📊 Data Coverage
+From `backend`:
 
-| Subject | Structured Topics | PDF Lines Indexed |
-|---------|------------------|-------------------|
-| Python  | 18 topics        | 2,507 lines       |
-| DBMS    | 17 topics        | 5,015 lines       |
+Generate Prisma client:
 
----
+```cmd
+npx prisma generate
+```
 
-## 🖥️ System Requirements
+Create a development migration:
 
-- Python 3.10+
-- Flask 3.x
-- RAM: 256MB minimum (entire dataset is in-memory)
-- No GPU required
-- Works offline
+```cmd
+npx prisma migrate dev
+```
+
+Deploy existing migrations:
+
+```cmd
+npx prisma migrate deploy
+```
+
+Seed database:
+
+```cmd
+npx prisma db seed
+```
+
+Open Prisma Studio:
+
+```cmd
+npx prisma studio
+```
+
+## Test Credentials
+
+Seeded accounts:
+
+### ADMIN
+
+```text
+Email: admin@supplyflow.com
+Password: Admin@123
+Role: ADMIN
+```
+
+### SALES USER
+
+```text
+Email: sales@supplyflow.com
+Password: Sales@123
+Role: SALES_USER
+```
+
+For production use, these credentials should be replaced with secure credentials.
+
+## Testing
+
+Backend automated tests:
+
+```cmd
+cd backend
+npm test
+```
+
+The test suite covers:
+
+- Authentication
+- Role-based authorization
+- Quotation total calculation
+- Draft quotation conversion rejection
+- Rejected quotation conversion rejection
+- Duplicate Sales Order prevention
+- Reservation beyond available inventory
+- Unauthorized restricted operations
+- Sales Order cancellation and reservation release
+
+The API can also be tested using the Postman collection:
+
+```text
+docs/postman/SupplyFlow_ERP_Postman_Collection.json
+```
+
+## Build Verification
+
+Backend production build:
+
+```cmd
+cd backend
+npm run build
+```
+
+Frontend production build:
+
+```cmd
+cd frontend
+npm run build
+```
+
+## Inventory Consistency
+
+The backend validates inventory operations using database transactions and guarded updates.
+
+During reservation:
+
+```text
+Reserved Quantity increases
+Physical Quantity remains unchanged
+Available Quantity decreases
+```
+
+During dispatch:
+
+```text
+Physical Quantity decreases
+Reserved Quantity decreases
+```
+
+Inventory updates are validated to prevent:
+
+- Negative physical quantity
+- Negative reserved quantity
+- Reserved quantity greater than physical quantity
+- Reservation beyond available stock
+- Dispatch beyond reserved stock
+
+## Security
+
+- Passwords are hashed using bcrypt.
+- Authentication uses JWT.
+- Protected routes require valid Bearer tokens.
+- Role authorization is enforced by backend middleware.
+- Request validation uses Zod.
+- Sensitive environment variables are stored outside source control.
+- Database operations use Prisma and transactions where workflow consistency is required.
+
+## API Documentation
+
+Import the Postman collection into Postman:
+
+```text
+docs/postman/SupplyFlow_ERP_Postman_Collection.json
+```
+
+The collection contains requests for:
+
+- Authentication
+- Enquiries
+- Quotations
+- Sales Orders
+- Inventory
+- Reservation
+- Dispatch
+- RBAC/error scenarios
+
+## ER Diagram
+
+The database ER diagram is available at:
+
+```text
+docs/ER-DIAGRAM.md
+```
+
+It documents the entities, primary keys, foreign keys, unique constraints, and relationships used by SupplyFlow ERP.
+
+## Demo Flow
+
+The recommended demonstration sequence is:
+
+```text
+1. Login as SALES_USER
+2. Create a Customer Enquiry
+3. Add multiple products and quantities
+4. Create a Quotation
+5. Send and accept the Quotation
+6. Convert the accepted Quotation to a Sales Order
+7. Login as ADMIN
+8. Confirm the Sales Order
+9. Verify inventory reservation
+10. Dispatch the Sales Order
+11. Verify physical and reserved inventory changes
+```
+
+## Repository Documentation
+
+```text
+README.md
+    ↓
+Project setup, workflow, APIs and testing
+
+docs/ER-DIAGRAM.md
+    ↓
+Database relationships and constraints
+
+docs/postman/SupplyFlow_ERP_Postman_Collection.json
+    ↓
+API testing and documentation
+```
+
+## Project Status
+
+SupplyFlow ERP implements the core industrial sales workflow with:
+
+- React frontend
+- Express/Node.js backend
+- PostgreSQL database
+- Prisma ORM
+- JWT authentication
+- Backend RBAC
+- Transactional inventory reservation
+- Sales order cancellation
+- Dispatch processing
+- Automated API/workflow tests
+- Postman API collection
+- ER diagram documentation
